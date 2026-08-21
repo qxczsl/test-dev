@@ -1,48 +1,60 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Depends
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.functions import user
+
+from database import get_db
+from models import User
+from schemas import UserCreate,UserUpdate
+
 app = FastAPI()
 @app.get("/hello")
 def hello():
     return {"message": "hello"}
 
-users = []
+
+
 
 @app.post("/users")
-def create_user(name: str,age: int=None):
-    user_id = len(users) +1
-    user = {'id': user_id, 'name': name }
-    if age is not None:
-        user['age'] = age
-    users.append(user)
-    return user
+async def create_user(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
+    new_user = User(name=user_data.name, age=user_data.age)
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+    return new_user
 
-@app.get("/users")
-def get_users():
+
+@app.get('/users')
+async def get_users(db:AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User))
+    users = result.scalars().all()
     return users
 
-@app.get("/users/{user_id}")
-def gete_user(user_id: int):
-    for user in users:
-        if user['id'] == user_id:
-            return user
-    return {'error':'用户不存在'}
+
+@app.get('/users/{user_id}')
+async def get_user(user_id: int,db: AsyncSession = Depends(get_db)):
+    user = await db.get(User,user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    return user
 
 @app.put("/users/{user_id}")
-def update_user(user_id: int, name: str, age: int=None):
-    for user in users:
-        if user['id'] == user_id:
-            if name is not None:
-                user['name'] = name
-            if age is not None:
-                user['age'] = age
-            return user
-        return {'error':'用户不存在'}
-
+async def update_user(user_id: int,user_data: UserUpdate, db: AsyncSession = Depends(get_db)):
+    user = await db.get(User,user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    data = user_data.model_dump(exclude_unset=True)
+    for key, value in data.items():
+        setattr(user, key, value)# 等价于 user.name = value / user.age = value
+    await db.commit()
+    await db.refresh(user)
+    return user
 
 @app.delete("/users/{user_id}")
-def delete_user(user_id: int):
-    for i, user in enumerate(users):
-        if user['id'] == user_id:
-            users.pop(i)
-            return {'message':'用户删除成功'}
-    return {'error':'用户不存在'}
-
+async def delete_user(user_id: int,db: AsyncSession = Depends(get_db)):
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    await db.delete(user)
+    await db.commit()
+    return {"message": "用户删除成功"}
